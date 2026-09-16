@@ -4,6 +4,7 @@ import random
 
 import numpy as np
 
+from app.src.application.rng import RandomProvider
 from app.src.domain.constants import WinMethod, TournamentStage
 from app.src.domain.models.match_result import MatchResult
 from app.src.domain.models.team import Team
@@ -13,9 +14,12 @@ from app.src.domain.simulation_model import SimulationModel
 class MatchSimulator:
     """Match simulator class."""
 
-    def __init__(self, model: SimulationModel):
+    def __init__(self, model: SimulationModel, rng: RandomProvider | None = None):
         """Match simulator constructor."""
         self.model = model
+        if rng is None:
+            rng = RandomProvider(np.random.default_rng(), random.Random())
+        self.rng = rng
 
     def _resolve_knockout(
         self, stage:TournamentStage, team_a: Team, team_b: Team, goals_a: int, goals_b: int
@@ -56,26 +60,24 @@ class MatchSimulator:
             win_method=win_method,
         )
 
-    @staticmethod
     def _generate_score(
+        self,
         lambda_a: float,
         lambda_b: float,
     ) -> tuple[int, int]:
         return (
-            np.random.poisson(lambda_a),
-            np.random.poisson(lambda_b),
+            self.rng.poisson(lambda_a),
+            self.rng.poisson(lambda_b),
         )
 
-    @staticmethod
-    def _simulate_penalties(team_a: Team, team_b: Team) -> Team:
+    def _simulate_penalties(self, team_a: Team, team_b: Team) -> Team:
         probability = team_a.rating / (team_a.rating + team_b.rating)
 
-        return team_a if random.random() < probability else team_b
+        return team_a if self.rng.uniform() < probability else team_b
 
-    @staticmethod
-    def _play_extra_time(goals_a: int, goals_b: int) -> tuple[int, int]:
-        goals_a += np.random.poisson(0.15)
-        goals_b += np.random.poisson(0.15)
+    def _play_extra_time(self, goals_a: int, goals_b: int) -> tuple[int, int]:
+        goals_a += self.rng.poisson(0.15)
+        goals_b += self.rng.poisson(0.15)
         return goals_a, goals_b
 
     def simulate_match(

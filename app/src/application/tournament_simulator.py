@@ -4,7 +4,11 @@ from collections import defaultdict
 from itertools import combinations
 from collections.abc import Iterator
 
+import numpy as np
+import random
+
 from app.src.application.match_simulator import MatchSimulator
+from app.src.application.rng import RandomProvider
 from app.src.domain.models.simulation_results import SimulationResult
 from app.src.domain.constants import (
     N_SIMULATIONS,
@@ -27,8 +31,14 @@ class TournamentSimulator:
         self.match_simulator: MatchSimulator = MatchSimulator(model=model)
         self.teams: list[Team] = teams
 
-    def run(self, n: int = N_SIMULATIONS) -> Iterator[SimulationResult]:
+    def run(self, n: int = N_SIMULATIONS, seed: int | None = None) -> Iterator[SimulationResult]:
         """Run the Tournament Simulation for n times."""
+        if seed is None:
+            rng = RandomProvider(np.random.default_rng(), random.Random())
+        else:
+            rng = RandomProvider(np.random.default_rng(seed), random.Random(seed))
+        self.match_simulator.rng = rng
+
         for simulation_id in range(n):
             simulation_result = self.simulate_tournament()
             print(f"🏆 Champion: {simulation_result.champion.team.name}")

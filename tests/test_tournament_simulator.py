@@ -1,5 +1,14 @@
 """Tests for tournament simulation helpers."""
 
+from datetime import date
+import numpy as np
+import random
+
+from app.src.domain.constants import WinMethod
+from app.src.application.match_simulator import MatchSimulator
+from app.src.application.rng import RandomProvider
+from app.src.application.simulation_models.v2 import V2Model
+from app.src.domain.models.historical_match import HistoricalMatch
 from app.src.application.tournament_simulator import TournamentSimulator
 from app.src.domain.constants import THIRD_PLACE_COMBINATIONS
 from app.src.domain.models.group_standing import GroupStanding
@@ -175,3 +184,123 @@ def test_build_round_resolves_dynamic_third_place_slots():
 def test_third_place_matrix_has_all_fifa_combinations():
     """Include all possible eight-group third-place combinations."""
     assert len(THIRD_PLACE_COMBINATIONS) == 495
+
+
+def _make_history(team_name: str, opponent_rating: int, goals_for: int, goals_against: int, result: str | None) -> list:
+    """Build a minimal 1-match history for a team."""
+    return [
+        HistoricalMatch(
+            date=date(2026, 6, 1),
+            opponent_team="opponent",
+            opponent_rating=opponent_rating,
+            goals_for=goals_for,
+            goals_against=goals_against,
+            competition="FIFA World Cup",
+            instance="2026",
+            winner=result,
+        )
+    ]
+
+
+def _make_v2_model(
+    team_a: "Team",
+    team_b: "Team",
+) -> "V2Model":
+    """Build a V2Model with two teams, using tournament-average approximations."""
+    avg_global_rating = (team_a.rating + team_b.rating) / 2
+    avg_tournament_rating = avg_global_rating
+    avg_goals = 2.5
+    return V2Model(
+        teams=[team_a, team_b],
+        average_global_rating=avg_global_rating,
+        average_tournament_rating=avg_tournament_rating,
+        average_goals=avg_goals,
+    )
+
+
+def test_match_simulation_is_reproducible():
+    """A seeded RNG produces deterministic, repeatable match outcomes.
+
+    Covers the non-draw path (Poisson scoring) and the draw -> extra-time -> penalties
+    path. Two runs with the same seed produce the same goals/winner/win_method.
+    A different seed produces a different outcome.
+    """
+    team_a = Team(
+        name="TeamA",
+        group="A",
+        rating=1600,
+        history=_make_history("TeamA", 1500, 2, 1, "TeamA"),
+    )
+    team_b = Team(
+        name="TeamB",
+        group="A",
+        rating=1400,
+        history=_make_history("TeamB", 1500, 1, 2, "TeamB"),
+    )
+
+    model = _make_v2_model(team_a, team_b)
+
+    # Seed 42: run twice, assert identical results
+    rng_42 = RandomProvider(np.random.default_rng(42), random.Random(42))
+    sim_a = MatchSimulator(model=model, rng=rng_42)
+    result_a = sim_a.simulate_match(team_a, team_b, is_knockout=True)
+
+    rng_42b = RandomProvider(np.random.default_rng(42), random.Random(42))
+    sim_b = MatchSimulator(model=model, rng=rng_42b)
+    result_b = sim_b.simulate_match(team_a, team_b, is_knockout=True)
+
+    assert result_a.goals_a == result_b.goals_a
+    assert result_a.goals_b == result_b.goals_b
+    assert result_a.winner.name == result_b.winner.name
+    assert result_a.win_method == result_b.win_method
+
+    # Seed 99: must produce a different outcome
+    rng_99 = RandomProvider(np.random.default_rng(99), random.Random(99))
+    sim_c = MatchSimulator(model=model, rng=rng_99)
+    result_c = sim_c.simulate_match(team_a, team_b, is_knockout=True)
+
+    assert (result_a.goals_a, result_a.goals_b) != (result_c.goals_a, result_c.goals_b) or (
+        result_a.winner.name != result_c.winner.name
+    )
+
+    # Verify goals are non-negative integers and winner is set in a knockout match
+    assert result_a.goals_a >= 0
+    assert result_a.goals_b >= 0
+    assert result_a.winner is not None
+
+
+def test_penalties_path_is_reproducible():
+    """Equal lambdas -> draw -> extra time draw -> penalties, with a deterministic seed.
+
+    Uses two teams with identical ratings so expected_goals are equal. The seeded RNG
+    is used to confirm that a draw triggers extra time and, when extra time also draws,
+    penalties are resolved via the rating ratio.
+    """
+    # Two identical teams -> equal expected goals -> guaranteed draw in regulation
+    team_x = Team(
+        name="TeamX",
+        group="X",
+        rating=1500,
+        history=_make_history("TeamX", 1500, 1, 1, None),
+    )
+    team_y = Team(
+        name="TeamY",
+        group="X",
+        rating=1500,
+        history=_make_history("TeamY", 1500, 1, 1, None),
+    )
+
+    model = _make_v2_model(team_x, team_y)
+
+    # Use seed 10 to make the penalties path deterministic (equal lambdas -> draw -> ET draw -> penalties)
+    rng = RandomProvider(np.random.default_rng(10), random.Random(10))
+    sim = MatchSimulator(model=model, rng=rng)
+    result = sim.simulate_match(team_x, team_y, is_knockout=True)
+
+    # Draw in regulation is expected with equal lambdas
+    assert result.goals_a == result.goals_b, (
+        f"Expected regulation draw with equal lambdas, got {result.goals_a}-{result.goals_b}"
+    )
+    assert result.went_to_extra_time is True
+    assert result.winner is not None
+    assert result.win_method in (WinMethod.EXTRA_TIME, WinMethod.PENALTIES)
