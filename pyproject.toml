@@ -23,5 +23,5 @@ dev = [
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "--cov=app --cov-report=term-missing --cov-fail-under=80"
+addopts = "--cov=app --cov-report=markdown --cov-fail-under=80"
 filterwarnings = "ignore::DeprecationWarning"
